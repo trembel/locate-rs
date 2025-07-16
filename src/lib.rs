@@ -5,13 +5,13 @@ use nalgebra::{ComplexField, Matrix3, RealField, RowVector3, SMatrix, SVector, U
 use num_traits::float::TotalOrder;
 use rand::RngCore;
 
-pub struct LocationSolver<'a, NODE, FLOAT, const NNODES: usize> {
-    known_locations: &'a FnvIndexMap<NODE, Vector3<FLOAT>, NNODES>,
+pub struct LocationSolver<'a, NODE, FLOAT, const MAXNNODES: usize> {
+    known_locations: &'a FnvIndexMap<NODE, Vector3<FLOAT>, MAXNNODES>,
     solving_tolerance: FLOAT,
 }
 
 #[allow(non_snake_case)]
-impl<'a, NODE, FLOAT, const NNODES: usize> LocationSolver<'a, NODE, FLOAT, NNODES>
+impl<'a, NODE, FLOAT, const MAXNNODES: usize> LocationSolver<'a, NODE, FLOAT, MAXNNODES>
 where
     NODE: core::cmp::Eq,
     NODE: core::fmt::Debug,
@@ -23,44 +23,18 @@ where
     FLOAT: TotalOrder,
 {
     pub fn new(
-        known_locations: &FnvIndexMap<NODE, Vector3<FLOAT>, NNODES>,
+        known_locations: &FnvIndexMap<NODE, Vector3<FLOAT>, MAXNNODES>,
         solving_tolerance: FLOAT,
-    ) -> LocationSolver<NODE, FLOAT, NNODES> {
+    ) -> LocationSolver<NODE, FLOAT, MAXNNODES> {
         LocationSolver {
             known_locations,
             solving_tolerance,
         }
     }
 
-    pub fn tdoa<const INFOSCAPACITY: usize>(
+    pub fn tdoa(
         &mut self,
-        tdoa_infos: FnvIndexMap<(NODE, NODE), FLOAT, INFOSCAPACITY>,
-        initial_guess: Option<Vector3<FLOAT>>,
-    ) -> Result<Vector3<FLOAT>, ()> {
-        // Internal macro for compile-time dispatch
-        macro_rules! dispatch_tdoa {
-            ($solver:expr, $infos:expr, $guess:expr, $cap:expr, [$($npairs:literal),+]) => {
-                match $infos.len() {
-                    $(
-                          $npairs => $solver.internal_tdoa::<$npairs, $cap>($infos, $guess),
-                    )+
-                    _ => Err(()),
-                }
-            };
-        }
-
-        dispatch_tdoa!(
-            self,
-            tdoa_infos,
-            initial_guess,
-            INFOSCAPACITY,
-            [3, 6, 10, 15, 21]
-        )
-    }
-
-    pub fn internal_tdoa<const NPAIRS: usize, const INFOSCAPACITY: usize>(
-        &mut self,
-        tdoa_infos: FnvIndexMap<(NODE, NODE), FLOAT, INFOSCAPACITY>,
+        tdoa_infos: FnvIndexMap<(NODE, NODE), FLOAT, MAXNNODES>,
         initial_guess: Option<Vector3<FLOAT>>,
     ) -> Result<Vector3<FLOAT>, ()> {
         // If no initial guess is provided, initialize x at the center of the known anchor locations.
@@ -77,10 +51,12 @@ where
         let lambda = FLOAT::from_f64(1e-3).unwrap(); // Levenberg damping factor
         let max_iterations = 20;
 
+        let len_tdoa_infos = tdoa_infos.len();
+
         for it in 0..max_iterations {
             // Populate Jacobian matrix
-            let mut residuals = SVector::<FLOAT, NPAIRS>::zeros();
-            let mut jacobian = SMatrix::<FLOAT, NPAIRS, 3>::zeros();
+            let mut residuals = SVector::<FLOAT, MAXNNODES>::zeros();
+            let mut jacobian = SMatrix::<FLOAT, MAXNNODES, 3>::zeros();
 
             for (k, (&(i, j), &delta_d_ij)) in tdoa_infos.iter().enumerate() {
                 let Pi = self.known_locations.get(&i).unwrap();
@@ -98,11 +74,26 @@ where
                 jacobian.row_mut(k).copy_from(&grad.transpose());
             }
 
+            // Manually compute JᵀJ and Jᵀr to avoid allocation (or too many operations)
+            let mut jtj = Matrix3::<FLOAT>::zeros(); // JᵀJ will be a 3x3 matrix
+            let mut jtr = Vector3::<FLOAT>::zeros(); // Jᵀr will be a 3x1 vector
+
+            for k in 0..len_tdoa_infos {
+                let row_k: RowVector3<FLOAT> = jacobian.row(k).into(); // Get the k-th row as a RowVector3 (1x3)
+                let res_k: FLOAT = residuals[k];                       // Get the k-th residual (scalar)
+
+                // Accumulate JᵀJ: (3x1) * (1x3) = 3x3 matrix.
+                // This multiplication is SIMD-optimized by nalgebra.
+                jtj += row_k.transpose() * row_k;
+
+                // Accumulate Jᵀr: (3x1) * scalar = 3x1 vector.
+                // This multiplication is SIMD-optimized by nalgebra.
+                jtr += row_k.transpose() * res_k;
+            }
+
             // Solve Levenberg-Marquard iteration
-            let jt = jacobian.transpose();
-            let jtj = jt * jacobian;
             let lhs = jtj + Matrix3::identity() * lambda;
-            let rhs = -jt * residuals;
+            let rhs = -jtr;
 
             // Solve (JᵀJ + λI) δ = -Jᵀr
             let delta = lhs.lu().solve(&rhs).ok_or(())?;
@@ -120,7 +111,7 @@ where
 
     pub fn trilateration<RNG>(
         &mut self,
-        trilateration_infos: FnvIndexMap<NODE, FLOAT, NNODES>,
+        trilateration_infos: FnvIndexMap<NODE, FLOAT, MAXNNODES>,
         rng: RNG,
     ) -> Result<SVector<FLOAT, 3>, ()>
     where
@@ -133,7 +124,7 @@ where
 
         // From here follow 10.1109/icassp.2019.8683355, Chapter 1.4, 2.1, 2.2
         // get all location, distance^2, weight pairs (weight as in (6) of the paper)
-        let mut data: Vec<(Vector3<FLOAT>, FLOAT, FLOAT), NNODES> = Vec::new();
+        let mut data: Vec<(Vector3<FLOAT>, FLOAT, FLOAT), MAXNNODES> = Vec::new();
         for (node, distance) in trilateration_infos {
             let _ = data.push((
                 self.known_locations[&node],

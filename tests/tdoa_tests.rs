@@ -29,24 +29,15 @@ fn test_tdoa_from_example() {
     let r31 = r3 - r1;
     let r41 = r4 - r1;
 
-    let r32 = r3 - r2;
-    let r42 = r4 - r2;
-
-    let r43 = r4 - r3;
-
-    let mut tdoa_infos = FnvIndexMap::<(&str, &str), f64, 8>::new();
+    let mut tdoa_infos = FnvIndexMap::<(&str, &str), f64, 4>::new();
     tdoa_infos.insert(("p2", "p1"), r21).unwrap();
     tdoa_infos.insert(("p3", "p1"), r31).unwrap();
     tdoa_infos.insert(("p4", "p1"), r41).unwrap();
 
-    tdoa_infos.insert(("p3", "p2"), r32).unwrap();
-    tdoa_infos.insert(("p4", "p2"), r42).unwrap();
-    tdoa_infos.insert(("p4", "p3"), r43).unwrap();
-
     // 4. Create solver and solve
     let solving_tolerance = 1e-6;
     let mut solver = LocationSolver::new(&known_locations, solving_tolerance);
-    let result = solver.tdoa::<8>(tdoa_infos, None);
+    let result = solver.tdoa(tdoa_infos, None);
 
     // 5. Print and assert results
     assert!(result.is_ok());
