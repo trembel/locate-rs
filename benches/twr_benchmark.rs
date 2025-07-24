@@ -1,15 +1,15 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use heapless::FnvIndexMap;
-use localization_core::*;
+use locate_rs::*;
 use nalgebra::Vector3;
-use rand::distributions::{Distribution, Uniform};
+use rand::distr::{Distribution, Uniform};
 use rand::prelude::*;
 use std::hint::black_box;
 use std::sync::{Arc, Mutex};
 
 fn twr_benchmark(c: &mut Criterion) {
     // Generate random position
-    let between: Uniform<f32> = Uniform::from(-100.0..=100.0);
+    let between: Uniform<f32> = Uniform::new_inclusive(-100.0, 100.0).unwrap();
     let r = Arc::new(Mutex::new(StdRng::seed_from_u64(0)));
 
     c.bench_function("twr_3d_4anc_multiple_random_benchmark", |b| {
@@ -75,7 +75,7 @@ fn twr_benchmark(c: &mut Criterion) {
 
 fn twr_benchmark_fast(c: &mut Criterion) {
     // Generate random position
-    let between: Uniform<f32> = Uniform::from(-100.0..=100.0);
+    let between: Uniform<f32> = Uniform::new_inclusive(-100.0, 100.0).unwrap();
     let r = Arc::new(Mutex::new(StdRng::seed_from_u64(0)));
 
     c.bench_function("twr_3d_4anc_multiple_random_benchmark_fast", |b| {

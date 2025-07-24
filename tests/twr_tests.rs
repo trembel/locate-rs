@@ -1,9 +1,9 @@
 use approx::assert_relative_eq;
 use heapless::FnvIndexMap;
-use localization_core::LocationSolver;
+use locate_rs::LocationSolver;
 use nalgebra::{RealField, Vector3};
 use num_traits::{float::TotalOrder, Float};
-use rand::distributions::{Distribution, Uniform};
+use rand::distr::{Distribution, Uniform};
 use rand::prelude::*;
 
 fn bad_placement_tetrahedron_volume<FLOAT>(
@@ -156,7 +156,7 @@ fn twr_3d_4anc_single_f64_fast() {
 #[test]
 fn twr_3d_4anc_multiple_random_f32() {
     let mut r = StdRng::seed_from_u64(0);
-    let between = Uniform::from(-100.0..=100.0);
+    let between = Uniform::new_inclusive(-100.0, 100.0).unwrap();
 
     let mut fail_count: usize = 0;
     let mut innacc_count: usize = 0;
@@ -238,7 +238,7 @@ fn twr_3d_4anc_multiple_random_f32() {
 #[test]
 fn twr_3d_4anc_multiple_random_f32_fast() {
     let mut r = StdRng::seed_from_u64(0);
-    let between = Uniform::from(-100.0..=100.0);
+    let between = Uniform::new_inclusive(-100.0, 100.0).unwrap();
 
     let mut fail_count: usize = 0;
     let mut innacc_count: usize = 0;
@@ -320,7 +320,7 @@ fn twr_3d_4anc_multiple_random_f32_fast() {
 #[test]
 fn twr_3d_4anc_multiple_random_f64() {
     let mut r = StdRng::seed_from_u64(0);
-    let between = Uniform::from(-100.0..=100.0);
+    let between = Uniform::new_inclusive(-100.0, 100.0).unwrap();
 
     let mut fail_count: usize = 0;
     let mut innacc_count: usize = 0;
@@ -400,7 +400,7 @@ fn twr_3d_4anc_multiple_random_f64() {
 #[test]
 fn twr_3d_4anc_multiple_random_f64_fast() {
     let mut r = StdRng::seed_from_u64(0);
-    let between = Uniform::from(-100.0..=100.0);
+    let between = Uniform::new_inclusive(-100.0, 100.0).unwrap();
 
     let mut fail_count: usize = 0;
     let mut innacc_count: usize = 0;
