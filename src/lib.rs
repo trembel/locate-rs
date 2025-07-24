@@ -5,8 +5,26 @@ use nalgebra::{ComplexField, Matrix3, RealField, RowVector3, SMatrix, SVector, U
 use num_traits::float::TotalOrder;
 use rand::RngCore;
 
+#[derive(Debug, PartialEq)]
+pub enum LocationError {
+    /// Not enough measurements or known locations to perform the calculation.
+    InsufficientData,
+    /// A node ID from the measurement data was not found in the known locations map.
+    NodeNotFound,
+    /// The iterative solver failed to converge or find a solution.
+    SolverFailed,
+    /// No real eigenvalue was found, which is necessary for the eigenvalue-based method.
+    NoRealEigenvalue,
+}
+
+/// A solver for 3D localization problems.
+///
+/// This struct provides methods to solve for a 3D position based on
+/// Time Difference of Arrival (TDOA) or trilateration data.
 pub struct LocationSolver<'a, NODE, FLOAT, const MAXNNODES: usize> {
+    /// A map of known node locations, where `NODE` is a unique identifier.
     known_locations: &'a FnvIndexMap<NODE, Vector3<FLOAT>, MAXNNODES>,
+    /// The tolerance used to determine when an iterative solver has converged.
     solving_tolerance: FLOAT,
 }
 
@@ -22,6 +40,12 @@ where
     FLOAT: simba::scalar::SubsetOf<f64>,
     FLOAT: TotalOrder,
 {
+    /// Creates a new `LocationSolver`.
+    ///
+    /// # Arguments
+    ///
+    /// * `known_locations` - A reference to a map of known node positions.
+    /// * `solving_tolerance` - The tolerance for determining convergence of iterative solvers.
     pub fn new(
         known_locations: &FnvIndexMap<NODE, Vector3<FLOAT>, MAXNNODES>,
         solving_tolerance: FLOAT,
@@ -32,13 +56,29 @@ where
         }
     }
 
+    /// Solves for the location using Time Difference of Arrival (TDOA) data.
+    ///
+    /// This method uses the Levenberg-Marquardt algorithm to iteratively find the position
+    /// that best fits the given TDOA measurements.
+    ///
+    /// # Arguments
+    ///
+    /// * `tdoa_distance_infos` - A map where the key is a pair of nodes `(i, j)` and the value
+    ///   is the difference in distance `d_i - d_j`. Location of `i` and `j` must be known.
+    /// * `initial_guess` - An optional initial guess for the location. If not provided,
+    ///   the center of the known anchor locations is used.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the calculated `Vector3<FLOAT>` position, or a `LocationError` if
+    /// solving fails.
     pub fn tdoa(
         &mut self,
         tdoa_distance_infos: FnvIndexMap<(NODE, NODE), FLOAT, MAXNNODES>,
         initial_guess: Option<Vector3<FLOAT>>,
-    ) -> Result<Vector3<FLOAT>, ()> {
+    ) -> Result<Vector3<FLOAT>, LocationError> {
         if tdoa_distance_infos.len() < 3 || self.known_locations.len() < 4 {
-            return Err(());
+            return Err(LocationError::InsufficientData);
         }
         // If no initial guess is provided, initialize x at the center of the known anchor locations.
         let mut x = initial_guess.unwrap_or_else(|| {
@@ -62,8 +102,14 @@ where
             let mut jacobian = SMatrix::<FLOAT, MAXNNODES, 3>::zeros();
 
             for (k, (&(i, j), &delta_d_ij)) in tdoa_distance_infos.iter().enumerate() {
-                let Pi = self.known_locations.get(&i).unwrap();
-                let Pj = self.known_locations.get(&j).unwrap();
+                let Pi = self
+                    .known_locations
+                    .get(&i)
+                    .ok_or(LocationError::NodeNotFound)?;
+                let Pj = self
+                    .known_locations
+                    .get(&j)
+                    .ok_or(LocationError::NodeNotFound)?;
 
                 let vi = x - *Pi;
                 let di = vi.norm();
@@ -99,7 +145,7 @@ where
             let rhs = -jtr;
 
             // Solve (JᵀJ + λI) δ = -Jᵀr
-            let delta = lhs.lu().solve(&rhs).ok_or(())?;
+            let delta = lhs.lu().solve(&rhs).ok_or(LocationError::SolverFailed)?;
 
             x += delta;
 
@@ -111,13 +157,29 @@ where
         Ok(x)
     }
 
+    /// Solves for the location using trilateration data with a fast iterative method.
+    ///
+    /// This method uses the Levenberg-Marquardt algorithm to iteratively find the position
+    /// that best fits the given distance measurements from known locations.
+    ///
+    /// # Arguments
+    ///
+    /// * `trilateration_infos` - A map where the key `i` is a node and the value is the
+    ///   measured distance to that node. Location of node `i` must be known.
+    /// * `initial_guess` - An optional initial guess for the location. If not provided,
+    ///   the center of the known anchor locations is used.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the calculated `Vector3<FLOAT>` position, or a `LocationError` if
+    /// solving fails.
     pub fn trilateration_fast(
         &mut self,
         trilateration_infos: FnvIndexMap<NODE, FLOAT, MAXNNODES>,
         initial_guess: Option<Vector3<FLOAT>>,
-    ) -> Result<Vector3<FLOAT>, ()> {
+    ) -> Result<Vector3<FLOAT>, LocationError> {
         if trilateration_infos.len() < 4 || self.known_locations.len() < 4 {
-            return Err(());
+            return Err(LocationError::InsufficientData);
         }
 
         // If no initial guess is provided, initialize x at the center of the known anchor locations.
@@ -142,7 +204,10 @@ where
             let mut jacobian = SMatrix::<FLOAT, MAXNNODES, 3>::zeros();
 
             for (k, (&node, &measured_distance)) in trilateration_infos.iter().enumerate() {
-                let anchor = self.known_locations.get(&node).unwrap();
+                let anchor = self
+                    .known_locations
+                    .get(&node)
+                    .ok_or(LocationError::NodeNotFound)?;
                 let vec = x - *anchor;
                 let dist = vec.norm();
 
@@ -174,7 +239,7 @@ where
             let rhs = -jtr;
 
             // Solve (JᵀJ + λI) δ = -Jᵀr
-            let delta = lhs.lu().solve(&rhs).ok_or(())?;
+            let delta = lhs.lu().solve(&rhs).ok_or(LocationError::SolverFailed)?;
 
             x += delta;
 
@@ -186,17 +251,33 @@ where
         Ok(x)
     }
 
+    /// Solves for the location using trilateration data with an eigenvalue-based method.
+    ///
+    /// This method is based on the paper "Optimal Trilateration is an Eigenvalue Problem"
+    /// and provides a non-iterative, closed-form solution.
+    /// See: 10.1109/icassp.2019.8683355
+    ///
+    /// # Arguments
+    ///
+    /// * `trilateration_infos` - A map where the key is a node and the value is the
+    ///   measured distance to that node.
+    /// * `rng` - A random number generator for the eigenvector calculation.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the calculated `Vector3<FLOAT>` position, or a `LocationError` if
+    /// solving fails.
     pub fn trilateration<RNG>(
         &mut self,
         trilateration_infos: FnvIndexMap<NODE, FLOAT, MAXNNODES>,
         rng: RNG,
-    ) -> Result<Vector3<FLOAT>, ()>
+    ) -> Result<Vector3<FLOAT>, LocationError>
     where
         RNG: RngCore,
     {
         // check for 3D sizes
         if trilateration_infos.len() < 4 || self.known_locations.len() < 4 {
-            return Err(());
+            return Err(LocationError::InsufficientData);
         }
 
         // From here follow 10.1109/icassp.2019.8683355, Chapter 1.4, 2.1, 2.2
@@ -204,7 +285,10 @@ where
         let mut data: Vec<(Vector3<FLOAT>, FLOAT, FLOAT), MAXNNODES> = Vec::new();
         for (node, distance) in trilateration_infos {
             let _ = data.push((
-                self.known_locations[&node],
+                *self
+                    .known_locations
+                    .get(&node)
+                    .ok_or(LocationError::NodeNotFound)?,
                 ComplexField::powi(distance, 2),
                 FLOAT::one() / FLOAT::from(4.0).unwrap() * ComplexField::powi(distance, 2),
             ));
@@ -260,16 +344,14 @@ where
 
         // Get eigenvectors of M corresponding to largest real eigenvalue,
         // APPARENTLY: MAX EIGENVALUE CORRESPONDS TO THE OPTIMUM SOLUTION.. WHY? I DON'T KNOW!
-        let mut x: SVector<FLOAT, 7> = self.get_ev(
-            &M,
-            M.complex_eigenvalues()
-                .into_iter()
-                .filter(|lambda| lambda.im == FLOAT::zero())
-                .max_by(|a, b| a.re.partial_cmp(&b.re).unwrap())
-                .unwrap()
-                .re,
-            rng,
-        )?;
+        let max_real_eigenvalue = M
+            .complex_eigenvalues()
+            .into_iter()
+            .filter(|lambda| lambda.im == FLOAT::zero())
+            .max_by(|a, b| a.re.total_cmp(&b.re))
+            .ok_or(LocationError::NoRealEigenvalue)?
+            .re;
+        let mut x: SVector<FLOAT, 7> = self.get_ev(&M, max_real_eigenvalue, rng)?;
         // scale them by last value,
         x /= x[(6, 0)];
         // get elements 3:5
@@ -281,13 +363,27 @@ where
         Ok(x)
     }
 
+    /// Computes the eigenvector for a given eigenvalue using inverse iteration.
+    ///
+    /// This is a helper function for `trilateration` where the eigenvector of the
+    /// largest eigenvalue is searched.
+    ///
+    /// # Arguments
+    ///
+    /// * `A` - The matrix for which to find the eigenvector.
+    /// * `lambda` - The eigenvalue corresponding to the desired eigenvector.
+    /// * `rng` - A random number generator to initialize the process.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the calculated eigenvector, or `Err(())` if solving fails.
     #[allow(non_snake_case)]
     fn get_ev<RNG>(
         &mut self,
         A: &SMatrix<FLOAT, 7, 7>,
         lambda: FLOAT,
         mut rng: RNG,
-    ) -> Result<SVector<FLOAT, 7>, ()>
+    ) -> Result<SVector<FLOAT, 7>, LocationError>
     where
         RNG: RngCore,
     {
@@ -306,7 +402,8 @@ where
 
         // Should converge pretty fast, anyway restrict iterations by 1000 - most of the time it will take less time
         for _ in 0..1000 {
-            let b_new: Unit<SVector<FLOAT, 7>> = Unit::new_normalize(M.solve(&b).ok_or(())?);
+            let b_new: Unit<SVector<FLOAT, 7>> =
+                Unit::new_normalize(M.solve(&b).ok_or(LocationError::SolverFailed)?);
             if (*b_new - *b).norm() < self.solving_tolerance {
                 return Ok(*b);
             }
