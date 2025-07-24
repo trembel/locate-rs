@@ -1,4 +1,4 @@
-//#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_std)]
 
 use heapless::{FnvIndexMap, Vec};
 use nalgebra::{ComplexField, Matrix3, RealField, RowVector3, SMatrix, SVector, Unit, Vector3};
@@ -34,9 +34,12 @@ where
 
     pub fn tdoa(
         &mut self,
-        tdoa_infos: FnvIndexMap<(NODE, NODE), FLOAT, MAXNNODES>,
+        tdoa_distance_infos: FnvIndexMap<(NODE, NODE), FLOAT, MAXNNODES>,
         initial_guess: Option<Vector3<FLOAT>>,
     ) -> Result<Vector3<FLOAT>, ()> {
+        if tdoa_distance_infos.len() < 3 || self.known_locations.len() < 4 {
+            return Err(());
+        }
         // If no initial guess is provided, initialize x at the center of the known anchor locations.
         let mut x = initial_guess.unwrap_or_else(|| {
             let num_known = self.known_locations.len();
@@ -48,17 +51,17 @@ where
             }
         });
 
-        let lambda = FLOAT::from_f64(1e-3).unwrap(); // Levenberg damping factor
-        let max_iterations = 20;
+        let lambda = FLOAT::from_f64(1e-3).unwrap(); // Levenberg-Marquardt damping factor
+        let max_iterations: usize = 20;
 
-        let len_tdoa_infos = tdoa_infos.len();
+        let len_tdoa_distance_infos = tdoa_distance_infos.len();
 
-        for it in 0..max_iterations {
+        for _ in 0..max_iterations {
             // Populate Jacobian matrix
             let mut residuals = SVector::<FLOAT, MAXNNODES>::zeros();
             let mut jacobian = SMatrix::<FLOAT, MAXNNODES, 3>::zeros();
 
-            for (k, (&(i, j), &delta_d_ij)) in tdoa_infos.iter().enumerate() {
+            for (k, (&(i, j), &delta_d_ij)) in tdoa_distance_infos.iter().enumerate() {
                 let Pi = self.known_locations.get(&i).unwrap();
                 let Pj = self.known_locations.get(&j).unwrap();
 
@@ -78,9 +81,9 @@ where
             let mut jtj = Matrix3::<FLOAT>::zeros(); // JᵀJ will be a 3x3 matrix
             let mut jtr = Vector3::<FLOAT>::zeros(); // Jᵀr will be a 3x1 vector
 
-            for k in 0..len_tdoa_infos {
+            for k in 0..len_tdoa_distance_infos {
                 let row_k: RowVector3<FLOAT> = jacobian.row(k).into(); // Get the k-th row as a RowVector3 (1x3)
-                let res_k: FLOAT = residuals[k];                       // Get the k-th residual (scalar)
+                let res_k: FLOAT = residuals[k]; // Get the k-th residual (scalar)
 
                 // Accumulate JᵀJ: (3x1) * (1x3) = 3x3 matrix.
                 // This multiplication is SIMD-optimized by nalgebra.
@@ -101,7 +104,81 @@ where
             x += delta;
 
             if delta.norm() < self.solving_tolerance {
-                println!("{:}", it);
+                break;
+            }
+        }
+
+        Ok(x)
+    }
+
+    pub fn trilateration_fast(
+        &mut self,
+        trilateration_infos: FnvIndexMap<NODE, FLOAT, MAXNNODES>,
+        initial_guess: Option<Vector3<FLOAT>>,
+    ) -> Result<Vector3<FLOAT>, ()> {
+        if trilateration_infos.len() < 4 || self.known_locations.len() < 4 {
+            return Err(());
+        }
+
+        // If no initial guess is provided, initialize x at the center of the known anchor locations.
+        let mut x = initial_guess.unwrap_or_else(|| {
+            let num_known = self.known_locations.len();
+            if num_known == 0 {
+                Vector3::zeros()
+            } else {
+                let sum_of_positions: Vector3<FLOAT> = self.known_locations.values().sum();
+                sum_of_positions / FLOAT::from_usize(num_known).unwrap()
+            }
+        });
+
+        let lambda = FLOAT::from_f64(1e-3).unwrap(); // Levenberg-Marquardt damping
+        let max_iterations: usize = 50;
+
+        let len_trilateration_infos = trilateration_infos.len();
+
+        for _ in 0..max_iterations {
+            // Prepare residuals and Jacobian
+            let mut residuals = SVector::<FLOAT, MAXNNODES>::zeros();
+            let mut jacobian = SMatrix::<FLOAT, MAXNNODES, 3>::zeros();
+
+            for (k, (&node, &measured_distance)) in trilateration_infos.iter().enumerate() {
+                let anchor = self.known_locations.get(&node).unwrap();
+                let vec = x - *anchor;
+                let dist = vec.norm();
+
+                residuals[k] = dist - measured_distance;
+
+                // ∂r/∂x = (x - anchor) / ‖x - anchor‖
+                jacobian.row_mut(k).copy_from(&(vec / dist).transpose());
+            }
+
+            // Manually compute JᵀJ and Jᵀr to avoid allocation (or too many operations)
+            let mut jtj = Matrix3::<FLOAT>::zeros(); // JᵀJ will be a 3x3 matrix
+            let mut jtr = Vector3::<FLOAT>::zeros(); // Jᵀr will be a 3x1 vector
+
+            for k in 0..len_trilateration_infos {
+                let row_k: RowVector3<FLOAT> = jacobian.row(k).into(); // Get the k-th row as a RowVector3 (1x3)
+                let res_k: FLOAT = residuals[k]; // Get the k-th residual (scalar)
+
+                // Accumulate JᵀJ: (3x1) * (1x3) = 3x3 matrix.
+                // This multiplication is SIMD-optimized by nalgebra.
+                jtj += row_k.transpose() * row_k;
+
+                // Accumulate Jᵀr: (3x1) * scalar = 3x1 vector.
+                // This multiplication is SIMD-optimized by nalgebra.
+                jtr += row_k.transpose() * res_k;
+            }
+
+            // Solve Levenberg-Marquard iteration
+            let lhs = jtj + Matrix3::identity() * lambda;
+            let rhs = -jtr;
+
+            // Solve (JᵀJ + λI) δ = -Jᵀr
+            let delta = lhs.lu().solve(&rhs).ok_or(())?;
+
+            x += delta;
+
+            if delta.norm() < self.solving_tolerance {
                 break;
             }
         }
@@ -113,7 +190,7 @@ where
         &mut self,
         trilateration_infos: FnvIndexMap<NODE, FLOAT, MAXNNODES>,
         rng: RNG,
-    ) -> Result<SVector<FLOAT, 3>, ()>
+    ) -> Result<Vector3<FLOAT>, ()>
     where
         RNG: RngCore,
     {
@@ -214,7 +291,7 @@ where
     where
         RNG: RngCore,
     {
-        // create 1e-6 deviation of lambda, s.t. matrix to be inversed is non-singular (needs f64)
+        // create 1e-3 deviation of lambda, s.t. matrix to be inversed is non-singular (works better with f64)
         let mu = lambda - FLOAT::from(1e-3).unwrap();
 
         // Generate matrix M
@@ -235,6 +312,6 @@ where
             }
             b = b_new;
         }
-        return Ok(*b);
+        Ok(*b)
     }
 }
