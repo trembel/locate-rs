@@ -333,7 +333,7 @@ where
 
         // Generate M
         let mut M: SMatrix<FLOAT, 7, 7> = SMatrix::zeros(); // Initialize a 9x9 matrix of zeros
-                                                            // Fill in the blocks
+        // Fill in the blocks
         M.view_mut((0, 0), (3, 3)).copy_from(&-D); // -D
         M.view_mut((0, 3), (3, 3))
             .copy_from(&-Matrix3::from_diagonal(&b));

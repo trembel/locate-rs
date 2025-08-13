@@ -1,7 +1,7 @@
 use heapless::FnvIndexMap;
 use locate_rs::LocationSolver;
 use nalgebra::{RealField, Vector3};
-use num_traits::{float::TotalOrder, Float};
+use num_traits::{Float, float::TotalOrder};
 use rand::distr::{Distribution, Uniform};
 use rand::prelude::*;
 
