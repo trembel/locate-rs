@@ -49,7 +49,7 @@ where
     pub fn new(
         known_locations: &FnvIndexMap<NODE, Vector3<FLOAT>, MAXNNODES>,
         solving_tolerance: FLOAT,
-    ) -> LocationSolver<NODE, FLOAT, MAXNNODES> {
+    ) -> LocationSolver<'_, NODE, FLOAT, MAXNNODES> {
         LocationSolver {
             known_locations,
             solving_tolerance,

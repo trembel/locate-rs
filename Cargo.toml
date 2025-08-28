@@ -1,7 +1,7 @@
 [package]
 name = "locate-rs"
 authors = ["Silvano Cortesi <silvano.cortesi@hotmail.com>"]
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 license = "LGPL-3.0"
 description = "A `no_std` Rust library for 3D localization using TDOA and Trilateration. It provides fast iterative solvers (Levenberg-Marquardt) and a slower closed-form, eigenvector-based solution (trilateration only) for high-accuracy positioning."
