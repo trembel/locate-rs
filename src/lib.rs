@@ -290,7 +290,7 @@ where
                     .get(&node)
                     .ok_or(LocationError::NodeNotFound)?,
                 ComplexField::powi(distance, 2),
-                FLOAT::one() / FLOAT::from(4.0).unwrap() * ComplexField::powi(distance, 2),
+                FLOAT::one() / (FLOAT::from(4.0).unwrap() * ComplexField::powi(distance, 2)),
             ));
         }
 

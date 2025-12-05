@@ -222,7 +222,7 @@ fn twr_3d_4anc_multiple_random_f32() {
         let mut solver = LocationSolver::new(&known_locations, solving_tolerance);
         match solver.trilateration(trilateration_infos, r.clone()) {
             Ok(result) => {
-                if (x_gt - result).norm() > 0.1 {
+                if (x_gt - result).norm() > 1e-3 {
                     // assert to 1 millimeter accuracy
                     innacc_count += 1;
                 }
@@ -231,7 +231,7 @@ fn twr_3d_4anc_multiple_random_f32() {
         }
     }
 
-    assert!(innacc_count < 10);
+    assert!(innacc_count < 15);
     assert_eq!(fail_count, 0);
 }
 
@@ -304,7 +304,7 @@ fn twr_3d_4anc_multiple_random_f32_fast() {
         let mut solver = LocationSolver::new(&known_locations, solving_tolerance);
         match solver.trilateration_fast(trilateration_infos, None) {
             Ok(result) => {
-                if (x_gt - result).norm() > 0.1 {
+                if (x_gt - result).norm() > 1e-3 {
                     // assert to 1 millimeter accuracy
                     innacc_count += 1;
                 }
